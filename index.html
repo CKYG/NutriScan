@@ -801,9 +801,14 @@ function scanParseNutrition(text,columnIndex=0){
       const pair=fields[key];
       if(rawNumbers.length<2||!pair||pair.length<2)continue;
       const [a,b]=rawNumbers;
-      if(a>=1&&b>0&&b<1&&Math.abs((a/10)/b-factor)/factor<0.12 && pair[1]>b*5){
-        fields[key]=[Number((a/10).toPrecision(10)),b];
-        flags[key]=`原始數值 ${a} / ${b}，推測第一欄漏讀小數點，暫校正為 ${a/10} / ${b}；請核對原圖。`;
+      if(a>=5&&b>0&&b<10&&a/(b*factor)>2.5){
+        const scaled=[10,100,1000].map(n=>a/n);
+        const matches=scaled.some(n=>Math.abs(n-b*factor)/Math.max(b*factor,0.001)<0.15);
+        if(!matches)continue;
+        // 依另一欄的標示值推回每份量；第二欄本身也可能四捨五入，故一律待核對。
+        const estimated=Number((b*factor+1e-9).toFixed(2));
+        fields[key]=[estimated,b];
+        flags[key]=`原始數值 ${a} / ${b}，第一欄小數點疑似遺失；依第二欄及份量推估為約 ${estimated} g，請核對原圖。`;
       }
     }
   }
