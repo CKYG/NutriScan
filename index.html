@@ -199,15 +199,15 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
         <div class="field"><label>食物名稱</label><input id="foodName" required placeholder="例：雞胸肉便當" /></div>
         <div class="field-inline" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
           <div class="field"><label>份量 (倍數)</label><input id="serving" type="number" step="0.1" value="1" min="0.1" /></div>
-          <div class="field"><label>熱量 kcal</label><input id="kcal" type="number" step="0.1" min="0" required /></div>
+          <div class="field"><label>熱量 kcal</label><input id="kcal" type="number" step="any" min="0" required /></div>
         </div>
         <div class="field-inline" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <div class="field"><label>蛋白質 g</label><input id="protein" type="number" step="0.1" min="0" value="0" /></div>
-          <div class="field"><label>脂肪 g</label><input id="fat" type="number" step="0.1" min="0" value="0" /></div>
+          <div class="field"><label>蛋白質 g</label><input id="protein" type="number" step="any" min="0" value="0" /></div>
+          <div class="field"><label>脂肪 g</label><input id="fat" type="number" step="any" min="0" value="0" /></div>
         </div>
         <div class="field-inline" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <div class="field"><label>碳水 g</label><input id="carbs" type="number" step="0.1" min="0" value="0" /></div>
-          <div class="field"><label>鈉 mg</label><input id="sodium" type="number" step="1" min="0" value="0" /></div>
+          <div class="field"><label>碳水 g</label><input id="carbs" type="number" step="any" min="0" value="0" /></div>
+          <div class="field"><label>鈉 mg</label><input id="sodium" type="number" step="any" min="0" value="0" /></div>
         </div>
         <div class="field"><label>餐別</label><select id="meal"><option>早餐</option><option>午餐</option><option>晚餐</option><option>點心</option></select></div>
         <div class="actions" style="margin-top: 8px;">
