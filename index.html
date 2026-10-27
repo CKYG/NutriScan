@@ -127,7 +127,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 
   <!-- 智慧營養標示掃描：相機拍照、相簿上傳與本機 OCR -->
   <section class="card ocr-panel" aria-labelledby="ocrTitle">
-    <div class="ocr-head"><h2 id="ocrTitle" class="section-title">📷 智慧營養標示掃描（OCR）</h2><span class="ocr-step">OCR 穩定辨識版 v4</span></div>
+    <div class="ocr-head"><h2 id="ocrTitle" class="section-title">📷 智慧營養標示掃描（OCR）</h2><span class="ocr-step">OCR 校驗加強版 v5</span></div>
     <p class="ocr-intro">對準包裝上的「營養標示」拍照或上傳圖片；載入後會自動辨識，並以影像增強和雙欄分析提高辨識率。完成後請核對包裝數值。</p>
     <div class="ocr-actions">
       <button type="button" class="btn primary" id="ocrTakePhotoBtn">📱 手機拍照</button>
@@ -139,7 +139,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
     <input id="ocrFileInput" type="file" accept="image/*" hidden aria-label="上傳營養標示照片" />
     <div class="camera-box" id="ocrCameraWrap" hidden>
       <video id="ocrVideo" playsinline autoplay muted aria-label="即時鏡頭畫面"></video>
-      <div class="actions"><button type="button" class="btn primary" id="ocrCaptureBtn">📸 拍下標示</button><button type="button" class="btn ghost" id="ocrStopBtn">關閉鏡頭</button></div>
+      <div class="actions"><button type="button" class="btn primary" id="ocrCaptureBtn">📸 拍下標示</button><button type="button" class="btn secondary" id="ocrTorchBtn" hidden disabled>🔦 開啟手電筒</button><button type="button" class="btn ghost" id="ocrStopBtn">關閉鏡頭</button></div>
     </div>
     <div class="ocr-display">
       <div>
@@ -414,6 +414,7 @@ document.getElementById('foodForm').onsubmit=e=>{
 const scanIds = id => document.getElementById(id);
 let scanImageData = null;
 let scanStream = null;
+let scanTorchOn = false;
 let scanWorking = false;
 let tesseractScriptLoading = null;
 const nutrientFields = [
@@ -519,6 +520,7 @@ async function startScanCamera(){
     const video=scanIds('ocrVideo');video.srcObject=stream;
     scanIds('ocrCameraWrap').hidden=false;
     await video.play();
+    scanUpdateTorchSupport();
     scanStatus('鏡頭已開啟，請將營養標示放入畫面後拍攝。','ok');
   }catch(error){
     stopScanCamera();
@@ -527,7 +529,30 @@ async function startScanCamera(){
     scanStatus(message+' 也可以選「手機拍照」或「上傳照片」。','error');
   }
 }
+function scanUpdateTorchSupport(){
+  const button=scanIds('ocrTorchBtn');
+  const track=scanStream?.getVideoTracks()?.[0];
+  let supported=false;
+  try{supported=!!track?.getCapabilities?.()?.torch}catch{}
+  button.hidden=!supported;
+  button.disabled=!supported;
+  scanTorchOn=false;
+  button.textContent='🔦 開啟手電筒';
+  if(!supported && scanStream)scanStatus('鏡頭已開啟。此裝置／瀏覽器不提供網頁手電筒控制；可改用較亮環境拍攝。','ok');
+}
+async function scanToggleTorch(){
+  const track=scanStream?.getVideoTracks()?.[0];
+  if(!track)return;
+  const next=!scanTorchOn;
+  try{
+    await track.applyConstraints({advanced:[{torch:next}]});
+    scanTorchOn=next;
+    scanIds('ocrTorchBtn').textContent=next?'🔦 關閉手電筒':'🔦 開啟手電筒';
+  }catch(error){scanStatus('此瀏覽器無法控制手電筒，請改用手機內建相機拍照或增加環境光。','error');}
+}
 function stopScanCamera(){
+  scanTorchOn=false;
+  const torchBtn=scanIds('ocrTorchBtn');torchBtn.hidden=true;torchBtn.disabled=true;torchBtn.textContent='🔦 開啟手電筒';
   if(scanStream){scanStream.getTracks().forEach(track=>track.stop());scanStream=null}
   const video=scanIds('ocrVideo');if(video){video.pause();video.srcObject=null}
   if(scanIds('ocrCameraWrap'))scanIds('ocrCameraWrap').hidden=true;
@@ -767,6 +792,78 @@ function scanParseNutrition(text,columnIndex=0){
       flags.sodium='由最後一行數字推測，請務必核對原圖';
     }
   }
+  // 先保護原圖第二欄的小數點：若既有解析把第二欄放大十倍，
+  // 但第一欄縮小十倍也符合比例，優先保留原始第二欄（標示待核對）。
+  if(factor){
+    for(const key of ['protein','fat','carbs']){
+      const sourceLine=lines.find(line=>getLabel(line)?.key===key);
+      const rawNumbers=sourceLine?numbers(sourceLine.slice(getLabel(sourceLine).length)):[];
+      const pair=fields[key];
+      if(rawNumbers.length<2||!pair||pair.length<2)continue;
+      const [a,b]=rawNumbers;
+      if(a>=1&&b>0&&b<1&&Math.abs((a/10)/b-factor)/factor<0.12 && pair[1]>b*5){
+        fields[key]=[Number((a/10).toPrecision(10)),b];
+        flags[key]=`原始數值 ${a} / ${b}，推測第一欄漏讀小數點，暫校正為 ${a/10} / ${b}；請核對原圖。`;
+      }
+    }
+  }
+  // OCR 校驗 v5：即使第一輪沒有找到碳水，仍用雙欄份量比例排除 1470/45、8/0.25 等錯位。
+  // 僅有單一欄位或雙欄不吻合時，不擅自猜測缺失的小數位。
+  if(factor){
+    for(const key of ['kcal','protein','fat','carbs','sodium']){
+      const pair=fields[key];
+      if(!pair || pair.length<2 || !Number.isFinite(pair[0]) || !Number.isFinite(pair[1]))continue;
+      const [a,b]=pair;
+      if(a===0&&b===0)continue;
+      const expected=b*factor;
+      const rel=Math.abs(a-expected)/Math.max(Math.abs(expected),0.001);
+      if(rel<0.12)continue;
+      // 檢查 OCR 漏讀小數點或額外的尾端 0，需符合每份/每100欄比例。
+      const proposals=[];
+      for(const scale of [0.001,0.01,0.1,10,100,1000]){
+        const corrected=Number((a*scale).toPrecision(10));
+        if(corrected>=0 && Math.abs(corrected-expected)/Math.max(Math.abs(expected),0.001)<0.12)
+          proposals.push({col:0,value:corrected,scale});
+        const correctedB=Number((b*scale).toPrecision(10));
+        if(correctedB>=0 && Math.abs(a-correctedB*factor)/Math.max(Math.abs(a),0.001)<0.12)
+          proposals.push({col:1,value:correctedB,scale});
+      }
+      // 單純一位小數誤差可修正；其餘只警示並拒絕不合理的值。
+      proposals.sort((x,y)=>Math.abs(Math.log10(x.scale))-Math.abs(Math.log10(y.scale)));
+      const chosen=proposals.find(x=>{
+        const value=x.value;
+        if(key==='kcal')return value<=2500;
+        if(key==='sodium')return value<=100000;
+        return value<=150;
+      });
+      if(chosen){
+        const original=pair[chosen.col];
+        pair[chosen.col]=chosen.value;
+        flags[key]=`原始數值 ${a} / ${b}；依每份量比例將 ${original} 修正為 ${chosen.value}，請對照包裝。`;
+      }else{
+        // 對於顯著錯位的數值，保留另一欄但阻止不可信的欄位被直接套用。
+        const suspect=(a>expected*2 || (key!=='kcal'&&a>150))?0:1;
+        pair[suspect]=null;
+        flags[key]=`兩欄 ${a} / ${b} 與每份量比例不符，已暫停使用其中一欄；請核對原圖。`;
+      }
+    }
+  }
+  // 常見 OCR 將 0.83 辨成 8、83：有每 100mL 0.25g 時，校正到 0.8g
+  // 但精度不足以推回 0.83，故一定標示待核對。
+  for(let col=0;col<2;col++){
+    const kcal=fields.kcal?.[col];
+    if(Number.isFinite(kcal)&&kcal>0){
+      const macros=[['protein',4],['fat',9],['carbs',4]];
+      for(const [key,mult] of macros){
+        const value=fields[key]?.[col];
+        if(!Number.isFinite(value)||value<=0)continue;
+        if(value*mult>kcal*1.2+12){
+          fields[key][col]=null;
+          flags[key]=`原始 ${value}g 與 ${kcal} kcal 不相容，未採用；請人工核對。`;
+        }
+      }
+    }
+  }
   // 第 2 道驗證：熱量應大致與蛋白質、脂肪、碳水化合物的熱量相符。
   // 一般標示可能有膳食纖維、糖醇等差異，因此只處理明顯相差 10 倍以上、
   // 且小數點移動後與三大營養素推算值接近的情況；不能作為精確驗證。
@@ -822,6 +919,14 @@ function scanParseNutrition(text,columnIndex=0){
         fields[key][col]=null;
         flags[key]=`原始辨識 ${current} g 與熱量 ${energy??'未知'} kcal 不合理，暫不採用，請人工填入。`;
       }
+    }
+  }
+  // 保守防呆：每份飲料的熱量 1470 kcal 若與每 100mL 45 kcal 不符，不能直接套用。
+  if(factor && fields.kcal?.length>=2){
+    const a=fields.kcal[0],b=fields.kcal[1];
+    if(Number.isFinite(a)&&Number.isFinite(b)&&a>0&&b>0 && Math.abs(a/(b*factor)-1)>0.2){
+      fields.kcal[0]=null;
+      flags.kcal='熱量雙欄比例不一致，已停止自動填入；請核對。';
     }
   }
   // 非零蛋白質／脂肪／碳水的總估算熱量明顯高於總熱量時，標示警告。
@@ -948,6 +1053,7 @@ scanIds('ocrFileInput').addEventListener('change',e=>{if(e.target.files[0])scanL
 scanIds('ocrLiveBtn').addEventListener('click',startScanCamera);
 scanIds('ocrStopBtn').addEventListener('click',()=>{stopScanCamera();scanStatus('鏡頭已關閉。')});
 scanIds('ocrCaptureBtn').addEventListener('click',scanCapture);
+scanIds('ocrTorchBtn').addEventListener('click',scanToggleTorch);
 scanIds('ocrRotateBtn').addEventListener('click',scanRotate);
 scanIds('ocrResetBtn').addEventListener('click',scanClear);
 scanIds('ocrRecognizeBtn').addEventListener('click',scanRecognize);
