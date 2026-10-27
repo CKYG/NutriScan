@@ -127,7 +127,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 
   <!-- 智慧營養標示掃描：相機拍照、相簿上傳與本機 OCR -->
   <section class="card ocr-panel" aria-labelledby="ocrTitle">
-    <div class="ocr-head"><h2 id="ocrTitle" class="section-title">📷 智慧營養標示掃描（OCR）</h2><span class="ocr-step">OCR 小數點修正版 v3</span></div>
+    <div class="ocr-head"><h2 id="ocrTitle" class="section-title">📷 智慧營養標示掃描（OCR）</h2><span class="ocr-step">OCR 穩定辨識版 v4</span></div>
     <p class="ocr-intro">對準包裝上的「營養標示」拍照或上傳圖片；載入後會自動辨識，並以影像增強和雙欄分析提高辨識率。完成後請核對包裝數值。</p>
     <div class="ocr-actions">
       <button type="button" class="btn primary" id="ocrTakePhotoBtn">📱 手機拍照</button>
@@ -160,7 +160,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
           <div class="field"><label for="ocrColumnMode">營養數值欄位</label><select id="ocrColumnMode"><option value="0">第 1 欄（每份）</option><option value="1">第 2 欄（每 100 公克／毫升）</option></select></div>
           <button type="button" class="btn secondary" id="ocrApplyBtn" disabled>✓ 套用到營養表單</button>
         </div>
-        <div class="ocr-hint" id="ocrHint">預設使用「每份」；切換「每 100 公克」時會檢查熱量小數點位置，校正結果仍需對照原圖。</div>
+        <div class="ocr-hint" id="ocrHint">預設使用「每份」；切換「每 100 公克／毫升」時會檢查小數點與數值比例，校正結果仍需對照原圖。</div>
       </div>
     </div>
     <details class="ocr-details" id="ocrDetails"><summary>展開 OCR 文字（可修改並重新解析）</summary>
@@ -688,7 +688,7 @@ function scanParseNutrition(text,columnIndex=0){
   const nameMatch=raw.match(/(?:品名|商品名稱|產品名稱)\s*[:]\s*([^\n]{2,35})/);
   const declaredServing=servingMatch?Number(servingMatch[1]):null;
   const has100=/(?:每\s*100\s*(?:公克|克|g|毫升|ml))/i.test(raw);
-  const factor=declaredServing && has100 && declaredServing>0 && declaredServing<100 ? declaredServing/100 : null;
+  const factor=declaredServing && has100 && declaredServing>0 && declaredServing<=2000 ? declaredServing/100 : null;
   // 表格常見「9.8 公克 32.5 公克」，但 OCR 可能讀成「9.8 52 325」。
   // 使用「每份量 / 100」比例，挑選合理的前兩欄，僅將小數點修復結果標為待核對。
   if(factor){
@@ -700,7 +700,7 @@ function scanParseNutrition(text,columnIndex=0){
         const out=[{num:n,changed:false}];
         if(!(n>0))return out;
         const upper=key==='kcal'?2500:key==='sodium'?100000:150;
-        if(['protein','fat','carbs'].includes(key)&&n>1){out.push({num:n/10,changed:true})}
+        if(['protein','fat','carbs'].includes(key)&&n>=1){for(const divisor of [10,100,1000])out.push({num:Number((n/divisor).toPrecision(10)),changed:true})}
         if(key==='sodium' && n>10)out.push({num:n/10,changed:true});
         if(n<(key==='kcal'?4:2)){
           for(const scale of [10,100,1000]){
@@ -716,8 +716,11 @@ function scanParseNutrition(text,columnIndex=0){
           for(const a of variants(vals[i]))for(const b of variants(vals[j])){
             if(a.num<=0||b.num<=0)continue;
             const diff=Math.abs(a.num/b.num-factor)/factor;
-            const priority=(i===0 && j===1?0:0.12) + (a.changed?0.035:0)+(b.changed?0.035:0);
-            const score=diff+priority;
+            const priority=(i===0 && j===1?0:0.12) + (a.changed?0.065:0)+(b.changed?0.065:0);
+            const macroFactor={protein:4,fat:9,carbs:4}[key];
+            const impossible=macroFactor && fields.kcal
+              ? ((Number.isFinite(fields.kcal[0]) && a.num*macroFactor>fields.kcal[0]*1.2+12?2:0) + (Number.isFinite(fields.kcal[1]) && b.num*macroFactor>fields.kcal[1]*1.2+12?2:0)) : 0;
+            const score=diff+priority+impossible;
             if(best===null || score<best.score)best={score,diff,a:a.num,b:b.num,i,j,changed:a.changed||b.changed};
           }
         }
@@ -788,9 +791,50 @@ function scanParseNutrition(text,columnIndex=0){
       }
     }
   }
+  // 第 3 道驗證：個別三大營養素提供的熱量不應明顯超過標示總熱量。
+  // 尤其可攔下 OCR 將 0.83 公克誤讀成 83 公克的危險情況。
+  for(let col=0;col<2;col++){
+    const energy=fields.kcal?.[col];
+    for(const [key,multiplier] of [['protein',4],['fat',9],['carbs',4]]){
+      const current=fields[key]?.[col];
+      if(!Number.isFinite(current)||current<=0)continue;
+      const tooHigh=Number.isFinite(energy)&&energy>0&&current*multiplier>energy*1.20+12;
+      const implausible=current>150;
+      if(!tooHigh&&!implausible)continue;
+      // 只有兩欄一致時才提出校正值，單欄絕不猜測小數點。
+      const other=fields[key]?.[1-col];
+      const expected=factor&&Number.isFinite(other)&&other>0
+        ? (col===0 ? other*factor : other/factor) : null;
+      let corrected=null;
+      if(expected!==null){
+        for(const divisor of [10,100,1000]){
+          const candidate=Number((current/divisor).toPrecision(10));
+          const relative=Math.abs(candidate-expected)/Math.max(expected,0.001);
+          if(relative<0.11 && (!Number.isFinite(energy)||candidate*multiplier<=energy*1.2+12)){
+            corrected=candidate;break;
+          }
+        }
+      }
+      if(corrected!==null){
+        fields[key][col]=corrected;
+        flags[key]=`原始辨識 ${current} ${key==='protein'?'g':key==='fat'?'g':'g'}，依雙欄份量比例與熱量檢查改為 ${corrected} g，務必核對原圖。`;
+      }else{
+        fields[key][col]=null;
+        flags[key]=`原始辨識 ${current} g 與熱量 ${energy??'未知'} kcal 不合理，暫不採用，請人工填入。`;
+      }
+    }
+  }
+  // 非零蛋白質／脂肪／碳水的總估算熱量明顯高於總熱量時，標示警告。
+  for(let col=0;col<2;col++){
+    const energy=fields.kcal?.[col];
+    if(!Number.isFinite(energy)||energy<=0)continue;
+    const known=[['protein',4],['fat',9],['carbs',4]];
+    const estimated=known.reduce((acc,[key,m])=>acc+(Number.isFinite(fields[key]?.[col])?fields[key][col]*m:0),0);
+    if(estimated>energy*1.25+15)flags.kcal='營養素換算熱量高於標示熱量，可能有 OCR 誤讀；請人工核對。';
+  }
   const values={};
   for(const [key,vals] of Object.entries(fields)){
-    if(vals.length>Number(columnIndex))values[key]=vals[Number(columnIndex)];
+    if(vals.length>Number(columnIndex) && Number.isFinite(vals[Number(columnIndex)]))values[key]=vals[Number(columnIndex)];
   }
   return {values,columns:fields,flags,serving:servingMatch?`${servingMatch[1]} ${servingMatch[2]}`:'',pack:packageMatch?Number(packageMatch[1]):null,name:nameMatch?nameMatch[1].trim():''};
 }
@@ -891,6 +935,7 @@ function scanApply(){
     if(parsed.values[f.key]===undefined){el.required=true;el.placeholder='請核對包裝後填入';}
   }
   scanIds('serving').value=1;
+  scanIds('ocrApplyBtn').dataset.ready='applied';
   if(parsed.name&&!scanIds('foodName').value.trim())scanIds('foodName').value=parsed.name;
   scanStatus('已填入營養表單；請檢查食物名稱、欄位、每份量、營養素和份數，再按「加入今日飲食」。','ok');
   scanIds('formCard').scrollIntoView({behavior:'smooth',block:'start'});
@@ -910,7 +955,17 @@ scanIds('ocrParseBtn').addEventListener('click',scanRenderParsed);
 scanIds('ocrColumnMode').addEventListener('change',()=>{if(scanIds('ocrRawText').value.trim())scanRenderParsed()});
 scanIds('ocrApplyBtn').addEventListener('click',scanApply);
 scanIds('clearFormBtn').addEventListener('click',scanClearMissingRequirements);
-scanIds('foodForm').addEventListener('submit',scanClearMissingRequirements);
+scanIds('foodForm').addEventListener('submit',e=>{
+  if(scanIds('ocrApplyBtn').dataset.ready==='applied'){
+    const absent=nutrientFields.filter(f=>scanIds(f.key).value.trim()==='');
+    if(absent.length){
+      e.preventDefault();e.stopImmediatePropagation();
+      scanStatus('請先依包裝填入未辨識的營養數值：'+absent.map(f=>f.name).join('、')+'。','error');
+      absent[0]&&scanIds(absent[0].key).focus();return;
+    }
+  }
+  scanClearMissingRequirements();
+},true);
 document.addEventListener('visibilitychange',()=>{if(document.hidden)stopScanCamera()});
 window.addEventListener('pagehide',stopScanCamera);
 // 在 HTTPS 環境可加入主畫面；瀏覽器離線功能是額外加值，OCR 首次使用仍需網路。
