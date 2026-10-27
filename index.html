@@ -257,7 +257,7 @@ function totals(log=getToday()){return log.reduce((a,x)=>{a.kcal+=+x.kcal||0;a.p
 function go(page){if(page!=='scan' && typeof stopScanCamera==='function')stopScanCamera();document.querySelectorAll('.page').forEach(x=>x.classList.toggle('active',x.id===page));document.querySelectorAll('.navlinks button').forEach(x=>x.classList.toggle('active',x.dataset.page===page));renderAll();window.scrollTo({top:0,behavior:'smooth'})}
 window.go=go;
 document.querySelectorAll('.navlinks button').forEach(b=>b.onclick=()=>go(b.dataset.page));
-function fmt(n){return Math.round(n*10)/10}
+function fmt(n){return Math.round((Number(n)+Number.EPSILON)*1000)/1000}
 function bmiClass(b){return b<18.5?'偏低':b<24?'正常':b<27?'過重':'偏高'}
 
 function renderDashboard(){const c=calc(),t=totals();document.getElementById('dashDate').textContent=new Date().toLocaleDateString('zh-TW',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
@@ -392,11 +392,11 @@ document.getElementById('foodForm').onsubmit=e=>{
     let item={
         name:foodName.value.trim(),
         serving:+serving.value||1,
-        kcal:+(kcal.value * (serving.value||1)).toFixed(1), // 計算總熱量 (單筆熱量 x 份量)
-        protein:+(protein.value * (serving.value||1)).toFixed(1),
-        fat:+(fat.value * (serving.value||1)).toFixed(1),
-        carbs:+(carbs.value * (serving.value||1)).toFixed(1),
-        sodium:+(sodium.value * (serving.value||1)).toFixed(1),
+        kcal:+(kcal.value * (serving.value||1)).toFixed(3), // 計算總熱量 (單筆熱量 x 份量)
+        protein:+(protein.value * (serving.value||1)).toFixed(3),
+        fat:+(fat.value * (serving.value||1)).toFixed(3),
+        carbs:+(carbs.value * (serving.value||1)).toFixed(3),
+        sodium:+(sodium.value * (serving.value||1)).toFixed(3),
         meal:meal.value,
         at:new Date().toISOString()
     };
